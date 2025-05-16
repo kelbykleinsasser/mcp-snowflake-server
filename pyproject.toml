@@ -21,7 +21,7 @@ build-backend = "hatchling.build"
 dev-dependencies = ["pyright>=1.1.389"]
 
 [project.scripts]
-mcp_snowflake_server = "mcp_snowflake_server:main"
+mcp_snowflake_server = "mcp_snowflake_server.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_snowflake_server"]

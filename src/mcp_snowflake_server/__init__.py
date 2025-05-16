@@ -74,16 +74,25 @@ def main():
 
     dotenv.load_dotenv()
 
+    # Get default configuration parameters
     default_connection_args = snowflake.connector.connection.DEFAULT_CONFIGURATION
 
-    connection_args_from_env = {
-        k: os.getenv("SNOWFLAKE_" + k.upper())
-        for k in default_connection_args
-        if os.getenv("SNOWFLAKE_" + k.upper()) is not None
-    }
+    # Load environment variables with proper casing
+    connection_args_from_env = {}
+    for k in default_connection_args:
+        env_key = "SNOWFLAKE_" + k.upper()
+        value = os.getenv(env_key)
+        if value is not None:
+            # Handle account identifier format
+            if k == "account":
+                # Remove any AWS region suffix if present
+                value = value.split(".")[0].lower()
+            connection_args_from_env[k] = value
 
     server_args, connection_args = parse_args()
 
+    # Merge environment variables with command line arguments
+    # Command line arguments take precedence
     connection_args = {**connection_args_from_env, **connection_args}
 
     assert (

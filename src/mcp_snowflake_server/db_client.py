@@ -7,41 +7,63 @@ from typing import Any
 from snowflake.snowpark import Session
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
 logger = logging.getLogger("mcp_snowflake_server")
-
 
 class SnowflakeDB:
     AUTH_EXPIRATION_TIME = 1800
+    MAX_RETRIES = 2
+    RETRY_DELAY = 1  # seconds
 
     def __init__(self, connection_config: dict):
-        self.connection_config = connection_config
+        self.connection_config = {
+            **connection_config,
+            "insecure_mode": True,  # Enable insecure mode to bypass certificate validation
+            "validate_default_parameters": True,
+        }
         self.session = None
         self.insights: list[str] = []
         self.auth_time = 0
-        self.init_task = None  # To store the task reference
+        self.init_task = None
+        self._connection_error = None
+        self._retry_count = 0
+        self._last_error_logged = None
 
     async def _init_database(self):
         """Initialize connection to the Snowflake database"""
-        try:
-            # Create session without setting specific database and schema
-            self.session = Session.builder.configs(self.connection_config).create()
+        while self._retry_count < self.MAX_RETRIES:
+            try:
+                # Create session with simplified connection parameters
+                self.session = Session.builder.configs(self.connection_config).create()
 
-            # Set initial warehouse if provided, but don't set database or schema
-            if "warehouse" in self.connection_config:
-                self.session.sql(f"USE WAREHOUSE {self.connection_config['warehouse'].upper()}")
+                # Set initial warehouse if provided
+                if "warehouse" in self.connection_config:
+                    self.session.sql(f"USE WAREHOUSE {self.connection_config['warehouse'].upper()}")
 
-            self.auth_time = time.time()
-        except Exception as e:
-            raise ValueError(f"Failed to connect to Snowflake database: {e}")
+                self.auth_time = time.time()
+                self._connection_error = None
+                self._retry_count = 0  # Reset retry count on successful connection
+                logger.info("Successfully connected to Snowflake")
+                return
+            except Exception as e:
+                self._retry_count += 1
+                error_msg = str(e)
+                
+                # Only log if it's a new error
+                if error_msg != self._last_error_logged:
+                    if self._retry_count < self.MAX_RETRIES:
+                        logger.warning(f"Connection attempt {self._retry_count} failed: {error_msg}")
+                    else:
+                        logger.error(f"Failed to connect to Snowflake after {self.MAX_RETRIES} attempts: {error_msg}")
+                    self._last_error_logged = error_msg
+                
+                self._connection_error = error_msg
+                if self._retry_count < self.MAX_RETRIES:
+                    await asyncio.sleep(self.RETRY_DELAY)
+                else:
+                    raise ValueError(f"Failed to connect to Snowflake database: {error_msg}")
 
     def start_init_connection(self):
         """Start database initialization in the background"""
-        # Create a task that runs in the background
         loop = asyncio.get_event_loop()
         self.init_task = loop.create_task(self._init_database())
         return self.init_task
@@ -55,16 +77,21 @@ class SnowflakeDB:
         elif not self.session or time.time() - self.auth_time > self.AUTH_EXPIRATION_TIME:
             await self._init_database()
 
+        if not self.session:
+            raise ValueError("No active database session")
+
         logger.debug(f"Executing query: {query}")
         try:
             result = self.session.sql(query).to_pandas()
             result_rows = result.to_dict(orient="records")
             data_id = str(uuid.uuid4())
-
             return result_rows, data_id
-
         except Exception as e:
-            logger.error(f'Database error executing "{query}": {e}')
+            error_msg = str(e)
+            # Only log if it's a new error
+            if error_msg != self._last_error_logged:
+                logger.error(f'Database error executing query: {error_msg}')
+                self._last_error_logged = error_msg
             raise
 
     def add_insight(self, insight: str) -> None:

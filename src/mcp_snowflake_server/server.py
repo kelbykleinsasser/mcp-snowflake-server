@@ -15,13 +15,25 @@ from pydantic import AnyUrl, BaseModel
 from .db_client import SnowflakeDB
 from .write_detector import SQLWriteDetector
 
+# Configure root logger
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Set default level to WARNING
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()],
 )
-logger = logging.getLogger("mcp_snowflake_server")
 
+# Configure our logger
+logger = logging.getLogger("mcp_snowflake_server")
+logger.setLevel(logging.INFO)
+
+# Set third-party loggers to WARNING
+logging.getLogger("snowflake.connector").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("boto3").setLevel(logging.WARNING)
+
+# Cache for tool list to avoid repeated logging
+_tools_logged = False
 
 def data_to_yaml(data: Any) -> str:
     return yaml.dump(data, indent=2, sort_keys=False)
@@ -43,8 +55,15 @@ def handle_tool_errors(func: Callable) -> Callable:
         try:
             return await func(*args, **kwargs)
         except Exception as e:
-            logger.error(f"Error in {func.__name__}: {str(e)}")
-            return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+            error_msg = str(e)
+            if "Could not connect to Snowflake backend" in error_msg:
+                # Only log connection errors once
+                if not getattr(wrapper, '_connection_error_logged', False):
+                    logger.error(f"Snowflake connection error: {error_msg}")
+                    wrapper._connection_error_logged = True
+            else:
+                logger.error(f"Error in {func.__name__}: {error_msg}")
+            return [types.TextContent(type="text", text=f"Error: {error_msg}")]
 
     return wrapper
 
@@ -552,8 +571,7 @@ async def main(
 
     @server.list_tools()
     async def handle_list_tools() -> list[types.Tool]:
-        logger.info("Listing tools")
-        logger.error(f"Allowed tools: {allowed_tools}")
+        global _tools_logged
         tools = [
             types.Tool(
                 name=tool.name,
@@ -562,6 +580,12 @@ async def main(
             )
             for tool in allowed_tools
         ]
+        
+        # Only log tools list once
+        if not _tools_logged:
+            logger.info("Available tools: %s", ", ".join(tool.name for tool in allowed_tools))
+            _tools_logged = True
+        
         return tools
 
     # Start server
