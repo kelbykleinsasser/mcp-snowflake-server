@@ -353,11 +353,13 @@ async def main(
     #
     if config_file:
         try:
-            with open(config_file, "r") as f:
+            config_path = os.path.abspath(config_file)
+            with open(config_path, "r") as f:
                 config = json.load(f)
-                logger.info(f"Loaded configuration from {config_file}")
+                logger.info(f"Loaded configuration from {config_path}")
         except Exception as e:
             logger.error(f"Error loading configuration file: {e}")
+            logger.error(f"Tried to load from path: {config_path}")
 
     # Merge exclude_patterns from parameters with config file
     exclusion_config = config.get("exclude_patterns", {})

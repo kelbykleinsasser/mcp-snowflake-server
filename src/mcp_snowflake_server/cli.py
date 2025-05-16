@@ -11,6 +11,10 @@ def main():
     if os.path.exists(dotenv_path):
         dotenv.load_dotenv(dotenv_path)
     
+    # Change to the directory containing the .env file if it exists
+    if os.path.exists(dotenv_path):
+        os.chdir(os.path.dirname(os.path.abspath(dotenv_path)))
+    
     # Now import and run the main function
     from mcp_snowflake_server import main as snowflake_main
     snowflake_main()
